@@ -48,11 +48,27 @@ def set_module_args(args):
     basic._ANSIBLE_ARGS = to_bytes(args)
 
 
-def unauthorized_resp():
+def cant_switch_org_resp():
+    return (None, {"status": 500})
+
+
+def switch_org_resp():
+    return (None, {"status": 200})
+
+
+def unauthorized_resp(module, full_url, **kwargs):
+    if '/api/user/using/' in full_url:
+        # switch organization succeeds
+        return (None, {"status": 200})
+
     return (None, {"status": 401})
 
 
-def permission_denied_resp():
+def permission_denied_resp(module, full_url, **kwargs):
+    if '/api/user/using/' in full_url:
+        # switch organization succeeds
+        return (None, {"status": 200})
+
     return (None, {"status": 403})
 
 
@@ -188,7 +204,8 @@ class GrafanaTeamsTest(TestCase):
         self.assertEqual(result.exception.args[0]['msg'], 'parameters are mutually exclusive: url_username|grafana_api_key')
 
     @patch('ansible_collections.community.grafana.plugins.modules.grafana_team.GrafanaTeamInterface.get_version')
-    def test_module_fails_with_low_grafana_version(self, mock_get_version):
+    @patch('ansible_collections.community.grafana.plugins.modules.grafana_team.fetch_url')
+    def test_module_fails_with_low_grafana_version(self, mock_fetch_url, mock_get_version):
         set_module_args({
             'name': 'MyTestTeam',
             'email': 'email@test.com',
@@ -198,6 +215,7 @@ class GrafanaTeamsTest(TestCase):
         })
 
         module = grafana_team.setup_module_object()
+        mock_fetch_url.return_value = switch_org_resp()
         mock_get_version.return_value = get_low_version_resp()
 
         with self.assertRaises(AnsibleFailJson) as result:
@@ -213,7 +231,7 @@ class GrafanaTeamsTest(TestCase):
             'url': 'http://grafana.example.com',
         })
         module = grafana_team.setup_module_object()
-        mock_fetch_url.return_value = unauthorized_resp()
+        mock_fetch_url.side_effect = unauthorized_resp
         mock_get_version.return_value = get_version_resp()
 
         with self.assertRaises(AnsibleFailJson) as result:
@@ -229,12 +247,28 @@ class GrafanaTeamsTest(TestCase):
             'url': 'http://grafana.example.com',
         })
         module = grafana_team.setup_module_object()
-        mock_fetch_url.return_value = permission_denied_resp()
+        mock_fetch_url.side_effect = permission_denied_resp
         mock_get_version.return_value = get_version_resp()
 
         with self.assertRaises(AnsibleFailJson) as result:
             grafana_team.main()
         self.assertTrue(result.exception.args[0]['msg'].startswith('Permission Denied'))
+
+    @patch('ansible_collections.community.grafana.plugins.modules.grafana_team.GrafanaTeamInterface.get_version')
+    @patch('ansible_collections.community.grafana.plugins.modules.grafana_team.fetch_url')
+    def test_module_failure_with_cant_switch_org_resp(self, mock_fetch_url, mock_get_version):
+        set_module_args({
+            'name': 'MyTestTeam',
+            'email': 'email@test.com',
+            'url': 'http://grafana.example.com',
+        })
+        module = grafana_team.setup_module_object()
+        mock_fetch_url.return_value = cant_switch_org_resp()
+        mock_get_version.return_value = get_version_resp()
+
+        with self.assertRaises(AnsibleFailJson) as result:
+            grafana_team.main()
+        self.assertTrue(result.exception.args[0]['msg'].startswith('Unable to switch to organization'))
 
     @patch('ansible_collections.community.grafana.plugins.modules.grafana_team.GrafanaTeamInterface.get_version')
     @patch('ansible_collections.community.grafana.plugins.modules.grafana_team.fetch_url')
@@ -251,7 +285,8 @@ class GrafanaTeamsTest(TestCase):
 
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
         res = grafana_iface.get_team("MyTestTeam")
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams/search?name=MyTestTeam',
             data=None,
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -273,7 +308,8 @@ class GrafanaTeamsTest(TestCase):
 
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
         res = grafana_iface.get_team("MyTestTeam")
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams/search?name=MyTestTeam',
             data=None,
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -296,7 +332,8 @@ class GrafanaTeamsTest(TestCase):
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
 
         res = grafana_iface.create_team("MyTestTeam", "email@test.com")
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams',
             data=json.dumps({"email": "email@test.com", "name": "MyTestTeam"}, sort_keys=True),
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -318,7 +355,8 @@ class GrafanaTeamsTest(TestCase):
 
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
         res = grafana_iface.update_team(2, "MyTestTeam", "email@test.com")
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams/2',
             data=json.dumps({"email": "email@test.com", "name": "MyTestTeam"}, sort_keys=True),
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -340,7 +378,8 @@ class GrafanaTeamsTest(TestCase):
 
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
         res = grafana_iface.delete_team(2)
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams/2',
             data=None,
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -362,7 +401,8 @@ class GrafanaTeamsTest(TestCase):
 
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
         res = grafana_iface.get_team_members(2)
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams/2/members',
             data=None,
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -384,7 +424,8 @@ class GrafanaTeamsTest(TestCase):
 
         grafana_iface = grafana_team.GrafanaTeamInterface(module)
         res = grafana_iface.get_team_members(2)
-        mock_fetch_url.assert_called_once_with(
+        self.assertEqual(mock_fetch_url.call_count, 2)
+        mock_fetch_url.assert_called_with(
             module, 'http://grafana.example.com/api/teams/2/members',
             data=None,
             headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -408,7 +449,8 @@ class GrafanaTeamsTest(TestCase):
         with patch.object(grafana_team.GrafanaTeamInterface, 'get_user_id_from_mail') as mock_get_user_id_from_mail:
             mock_get_user_id_from_mail.return_value = 42
             res = grafana_iface.add_team_member(2, "another@test.com")
-            mock_fetch_url.assert_called_once_with(
+            self.assertEqual(mock_fetch_url.call_count, 2)
+            mock_fetch_url.assert_called_with(
                 module, 'http://grafana.example.com/api/teams/2/members',
                 data=json.dumps({'userId': 42}),
                 headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
@@ -432,7 +474,8 @@ class GrafanaTeamsTest(TestCase):
         with patch.object(grafana_team.GrafanaTeamInterface, 'get_user_id_from_mail') as mock_get_user_id_from_mail:
             mock_get_user_id_from_mail.return_value = 42
             res = grafana_iface.delete_team_member(2, "another@test.com")
-            mock_fetch_url.assert_called_once_with(
+            self.assertEqual(mock_fetch_url.call_count, 2)
+            mock_fetch_url.assert_called_with(
                 module, 'http://grafana.example.com/api/teams/2/members/42',
                 data=None,
                 headers={'Content-Type': 'application/json', 'Authorization': self.authorization},
